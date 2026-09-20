@@ -194,9 +194,9 @@
 
     <div class="bloque">
       <div class="bloque-titulo">Tus datos</div>
-      <div class="campo"><label>Nombre</label><input type="text" id="nombre" required></div>
-      <div class="campo"><label>Apellido</label><input type="text" id="apellido" required></div>
-      <div class="campo"><label>Teléfono</label><input type="tel" id="telefono" required placeholder="0412..."></div>
+      <div class="campo"><label>Nombre</label><input type="text" id="nombre" required autocomplete="off"></div>
+      <div class="campo"><label>Apellido</label><input type="text" id="apellido" required autocomplete="off"></div>
+      <div class="campo"><label>Teléfono</label><input type="tel" id="telefono" required placeholder="0412..." autocomplete="off"></div>
     </div>
 
     <div class="bloque">
@@ -232,11 +232,33 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/supabase/2.45.4/supabase.min.js"></script>
 <script>
+  // ---- Cliente minimo a Supabase (sin CDN, fetch directo al REST/RPC) ----
   const SUPABASE_URL = "https://tgvcvnhrwswuxgjbpvwq.supabase.co";
   const SUPABASE_KEY = "sb_publishable_EKV8OM1y96u-DV_kUPGwkg_BZuGdf4D";
-  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  const sb = {
+    rpc: async function(fn, params){
+      try{
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": SUPABASE_KEY
+          },
+          body: JSON.stringify(params || {})
+        });
+        let data = null;
+        try{ data = await res.json(); }catch(_){ data = null; }
+        if(!res.ok){
+          return { data: null, error: { message: (data && (data.message || data.error)) || `HTTP ${res.status}` } };
+        }
+        return { data, error: null };
+      }catch(ex){
+        return { data: null, error: { message: ex.message || "fallo de red" } };
+      }
+    }
+  };
 
   const WEBHOOK_MINI_FORMULARIOS = "https://hook.us2.make.com/mq6evphde7l2rhlyz0dosqgg4kspvks1";
 
@@ -260,9 +282,13 @@
   }
 
   const params = new URLSearchParams(window.location.search);
-  const ids = (params.get("ids") || "").split(",").map(s=>s.trim()).filter(Boolean);
+  const idsParam = params.get("ids") || "";
+  const ids = idsParam.split(",").map(s=>s.trim()).filter(Boolean);
   const refCode = params.get("ref") || null;
   const telWa = normalizarTelWa(params.get("tel"));
+
+  // Clave de "un solo uso": este link (mismos eventos + mismo tel) ya reservado en este navegador.
+  const STORAGE_KEY = (ids.length && telWa) ? `reserva_enviada_${idsParam}_${telWa}` : null;
 
   let eventos = [];
   let seleccionado = null;
@@ -329,6 +355,31 @@
     document.querySelectorAll('.metodo').forEach(m => m.classList.toggle('seleccionado', m===el));
   });
 
+  function mostrarOkGuardado(data){
+    document.getElementById('contenido').classList.add('oculto');
+    document.getElementById('okTotal').textContent =
+      `Total a pagar: ${fmtUsd(data.monto_total)}${data.es_codigo_propio ? ' (con tu descuento aplicado)' : ''}`;
+    const btnWa = document.getElementById('btnWhatsapp');
+    const msg = `✅ Confirmo mi reserva *${data.compra_id}* — ${data.evento_nombre}, ${data.cantidad} persona(s), pago por ${data.metodo_pago_elegido}. Quedo pendiente de los datos de pago.`;
+    btnWa.href = `https://wa.me/584221482602?text=${encodeURIComponent(msg)}`;
+    document.getElementById('ok').classList.add('show');
+  }
+
+  // Si este navegador ya reservó con este mismo link (mismos eventos + mismo tel), no dejar volver a reservar.
+  function revisarEnvioPrevio(){
+    if(!STORAGE_KEY) return false;
+    try{
+      const guardado = localStorage.getItem(STORAGE_KEY);
+      if(guardado){
+        mostrarOkGuardado(JSON.parse(guardado));
+        return true;
+      }
+    }catch(_){ /* localStorage no disponible: seguimos igual */ }
+    return false;
+  }
+
+  window.addEventListener('pageshow', () => { revisarEnvioPrevio(); });
+
   document.getElementById('btnConfirmar').addEventListener('click', async () => {
     const err = document.getElementById('err');
     err.style.display = 'none';
@@ -344,46 +395,45 @@
     const btn = document.getElementById('btnConfirmar');
     btn.disabled = true; btn.textContent = 'Reservando...';
 
-    try{
-      const { data, error } = await sb.rpc('fn_crear_reserva_experiencia', {
-        p_evento_id: seleccionado,
-        p_cantidad: cantidad,
-        p_nombre: nombre,
-        p_apellido: apellido,
-        p_telefono: telefono,
-        p_metodo_pago_elegido: metodoElegido,
-        p_codigo_referido_usado: refCode
-      });
-      if(error || !data || data.ok === false){
-        throw new Error(error?.message || data?.error || 'No se pudo reservar');
-      }
-      document.getElementById('contenido').classList.add('oculto');
-      document.getElementById('okTotal').textContent =
-        `Total a pagar: ${fmtUsd(data.monto_total)}${data.es_codigo_propio ? ' (con tu descuento aplicado)' : ''}`;
+    const { data, error } = await sb.rpc('fn_crear_reserva_experiencia', {
+      p_evento_id: seleccionado,
+      p_cantidad: cantidad,
+      p_nombre: nombre,
+      p_apellido: apellido,
+      p_telefono: telefono,
+      p_metodo_pago_elegido: metodoElegido,
+      p_codigo_referido_usado: refCode,
+      p_tel_wa: telWa
+    });
 
-      const enviado = telWa ? await notificarValentina({
-        formulario: "reserva_experiencia",
-        telefono: telWa,
-        compra_id: data.compra_id,
-        evento_nombre: data.evento_nombre,
-        cantidad: data.cantidad,
-        monto_total: data.monto_total,
-        moneda: data.moneda,
-        metodo_pago_elegido: data.metodo_pago_elegido,
-        es_codigo_propio: data.es_codigo_propio
-      }) : false;
-
-      const btnWa = document.getElementById('btnWhatsapp');
-      if(enviado){
-        btnWa.style.display = "none";
-      } else {
-        const msg = `✅ Confirmo mi reserva *${data.compra_id}* — ${data.evento_nombre}, ${data.cantidad} persona(s), pago por ${data.metodo_pago_elegido}. Quedo pendiente de los datos de pago.`;
-        btnWa.href = `https://wa.me/584221482602?text=${encodeURIComponent(msg)}`;
-      }
-      document.getElementById('ok').classList.add('show');
-    }catch(ex){
-      mostrarError(ex.message.includes('cupos') ? ex.message : 'No pudimos completar la reserva. Intenta de nuevo.');
+    if(error || !data || data.ok === false){
+      const codigoError = (data && data.error) || (error && error.message) || 'fallo';
+      mostrarError(codigoError.toLowerCase().includes('cupos') ? codigoError : 'No pudimos completar la reserva. Intenta de nuevo.');
       btn.disabled = false; btn.textContent = 'Confirmar reserva';
+      return;
+    }
+
+    // Exito: guardamos para que este link ya no se pueda volver a usar desde este navegador.
+    try{
+      if(STORAGE_KEY) localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    }catch(_){ /* si no se puede guardar, igual mostramos el resultado */ }
+
+    mostrarOkGuardado(data);
+
+    const enviado = telWa ? await notificarValentina({
+      formulario: "reserva_experiencia",
+      telefono: telWa,
+      compra_id: data.compra_id,
+      evento_nombre: data.evento_nombre,
+      cantidad: data.cantidad,
+      monto_total: data.monto_total,
+      moneda: data.moneda,
+      metodo_pago_elegido: data.metodo_pago_elegido,
+      es_codigo_propio: data.es_codigo_propio
+    }) : false;
+
+    if(enviado){
+      document.getElementById('btnWhatsapp').style.display = "none";
     }
   });
 
@@ -399,6 +449,10 @@
       document.getElementById('sinDatos').classList.add('show');
       return;
     }
+
+    // Si este navegador ya reservó con este mismo link, mostrar el resultado guardado y no pedir nada mas.
+    if(revisarEnvioPrevio()) return;
+
     const { data, error } = await sb.rpc('fn_eventos_disponibles_por_ids', { p_ids: ids });
     if(error || !data || data.length===0){
       document.getElementById('contenido').classList.add('oculto');
