@@ -88,6 +88,7 @@
   .opcion-fecha .info-fecha .detalle{ font-size:12.5px; color:var(--forest-soft); margin-top:1px; }
   .opcion-fecha .precio-cupos{ text-align:right; }
   .opcion-fecha .precio{ font-weight:700; font-size:14px; color:var(--ochre-dark); }
+  .opcion-fecha .precio-bs{ font-size:11px; color:var(--forest-soft); margin-top:1px; white-space:nowrap; }
   .opcion-fecha .cupos{ font-size:11.5px; color:var(--forest-soft); }
 
   .cantidad-row{
@@ -137,10 +138,24 @@
     border-radius:14px;
     padding:18px 20px;
     display:flex; align-items:center; justify-content:space-between;
-    margin-bottom:18px;
+    margin-bottom:14px;
   }
   .resumen-total .etiqueta{ font-size:12.5px; opacity:.8; }
-  .resumen-total .monto{ font-family:'Fraunces', serif; font-size:24px; font-weight:600; }
+  .resumen-total .montos{ text-align:right; }
+  .resumen-total .monto{ display:block; font-family:'Fraunces', serif; font-size:24px; font-weight:600; }
+  .resumen-total .monto-bs{ display:none; font-size:12px; opacity:.8; margin-top:2px; }
+
+  .aviso-tiempo{
+    background:#FBF3DF;
+    border:1.5px solid #E6CF98;
+    color:#6B4E16;
+    border-radius:12px;
+    padding:11px 14px;
+    font-size:13px;
+    line-height:1.4;
+    margin:0 0 16px;
+  }
+  .aviso-tiempo.centrado{ text-align:center; margin:16px 0 0; }
 
   .btn-confirmar{
     width:100%;
@@ -162,6 +177,7 @@
   .state.show{ display:block; }
   .state h2{ font-family:'Fraunces', serif; font-size:20px; color:var(--forest); margin:14px 0 8px; }
   .state p{ color:var(--forest-soft); font-size:14px; }
+  .state .bs-ok{ font-size:13px; opacity:.85; margin-top:-6px; }
   #contenido.oculto{ display:none; }
 </style>
 </head>
@@ -212,8 +228,13 @@
 
     <div class="resumen-total">
       <span class="etiqueta">Total a pagar</span>
-      <span class="monto" id="totalTxt">$0.00</span>
+      <span class="montos">
+        <span class="monto" id="totalTxt">$0.00</span>
+        <span class="monto-bs" id="totalBs"></span>
+      </span>
     </div>
+
+    <p class="aviso-tiempo" id="avisoForm">⏱️ Una vez que confirmes, tendrás <strong class="minutos-pago">10</strong> minutos para hacer el pago. Ten tu método de pago listo.</p>
 
     <p class="err" id="err"></p>
     <button class="btn-confirmar" id="btnConfirmar">Confirmar reserva</button>
@@ -222,9 +243,11 @@
   <div class="state" id="ok">
     <h2>¡Reserva apartada! 🌿</h2>
     <p id="okTotal">Total a pagar: —</p>
+    <p id="okBs" class="bs-ok" style="display:none;"></p>
     <p id="okSaldo" style="display:none;"></p>
-    <p>Dale al botón para volver a WhatsApp y que Valentina te envíe los datos de pago.</p>
+    <p>Toca el botón para volver a WhatsApp con Valentina; ella te envía los datos de pago.</p>
     <a id="btnWhatsapp" class="btn-confirmar" style="display:inline-block;text-decoration:none;margin-top:14px;" target="_blank" rel="noopener">Volver a WhatsApp ✅</a>
+    <p class="aviso-tiempo centrado">⏱️ Tienes <strong class="minutos-pago">10</strong> minutos para completar el pago. Pasado ese tiempo tu cupo podría liberarse.</p>
   </div>
 
   <div class="state" id="sinDatos">
@@ -237,6 +260,10 @@
   // ---- Cliente minimo a Supabase (sin CDN, fetch directo al REST/RPC) ----
   const SUPABASE_URL = "https://tgvcvnhrwswuxgjbpvwq.supabase.co";
   const SUPABASE_KEY = "sb_publishable_EKV8OM1y96u-DV_kUPGwkg_BZuGdf4D";
+
+  // Minutos que se le muestran a la persona para completar el pago despues de reservar.
+  // IMPORTANTE: debe coincidir con el tiempo real de vencimiento del enlace de pago.
+  const MINUTOS_PARA_PAGAR = 10;
 
   const sb = {
     rpc: async function(fn, params){
@@ -255,6 +282,17 @@
           return { data: null, error: { message: (data && (data.message || data.error)) || `HTTP ${res.status}` } };
         }
         return { data, error: null };
+      }catch(ex){
+        return { data: null, error: { message: ex.message || "fallo de red" } };
+      }
+    },
+    get: async function(path){
+      try{
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+          headers: { "apikey": SUPABASE_KEY }
+        });
+        if(!res.ok) return { data: null, error: { message: `HTTP ${res.status}` } };
+        return { data: await res.json(), error: null };
       }catch(ex){
         return { data: null, error: { message: ex.message || "fallo de red" } };
       }
@@ -296,7 +334,36 @@
   let cantidad = 1;
   let metodoElegido = null;
 
+  // Tasa BCV (Bs por 1 unidad de la moneda de la tasa). Viene de la tabla config:
+  //   campo 'tasa_bcv'    -> valor numerico
+  //   campo 'tasa_moneda' -> 'USD' | 'EUR' | 'USDT' (opcional; si no existe se asume 'USD')
+  let tasaBcv = null;
+  let tasaMoneda = 'USD';
+
   function fmtUsd(n){ return '$' + Number(n).toFixed(2); }
+
+  function fmtBs(n){
+    return 'Bs. ' + Number(n).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function bsDe(monto){
+    if(!tasaBcv) return null;
+    return Number(monto) * tasaBcv;
+  }
+  function etiquetaTasa(){ return `tasa BCV ${tasaMoneda}`; }
+
+  async function cargarTasa(){
+    const { data, error } = await sb.get('config?campo=in.(tasa_bcv,tasa_moneda)&select=campo,valor');
+    if(error || !Array.isArray(data)) return;
+    data.forEach(r => {
+      if(r.campo === 'tasa_bcv'){
+        const n = parseFloat(String(r.valor).replace(',', '.'));
+        if(n > 0) tasaBcv = n;
+      }
+      if(r.campo === 'tasa_moneda' && r.valor){
+        tasaMoneda = String(r.valor).trim().toUpperCase();
+      }
+    });
+  }
 
   // La funcion fn_crear_reserva_experiencia devuelve monto_anticipo (lo que se paga ahora),
   // monto_total_evento y saldo_dia_evento. No existe un campo "monto_total".
@@ -327,6 +394,7 @@
         </div>
         <div class="precio-cupos">
           <div class="precio">${fmtUsd(ev.precio)}</div>
+          ${tasaBcv ? `<div class="precio-bs">${fmtBs(bsDe(ev.precio))}</div>` : ''}
           <div class="cupos">${ev.cupos_disponibles} cupos</div>
         </div>
       </div>
@@ -348,6 +416,13 @@
     const total = ev ? ev.precio * cantidad : 0;
     document.getElementById('totalTxt').textContent = fmtUsd(total);
     document.getElementById('cantidadTxt').textContent = cantidad;
+    const bsEl = document.getElementById('totalBs');
+    if(tasaBcv && ev){
+      bsEl.textContent = `≈ ${fmtBs(bsDe(total))} · ${etiquetaTasa()}`;
+      bsEl.style.display = 'block';
+    }else{
+      bsEl.style.display = 'none';
+    }
   }
 
   document.getElementById('btnMenos').addEventListener('click', () => {
@@ -374,6 +449,13 @@
     document.getElementById('okTotal').textContent = hayMonto
       ? `${etiqueta}: ${fmtUsd(m.anticipo)}${data.es_codigo_propio ? ' (con tu descuento aplicado)' : ''}`
       : 'Tu reserva quedó apartada.';
+    const okBs = document.getElementById('okBs');
+    if(tasaBcv && m.anticipo > 0){
+      okBs.textContent = `≈ ${fmtBs(bsDe(m.anticipo))} · ${etiquetaTasa()}`;
+      okBs.style.display = 'block';
+    }else{
+      okBs.style.display = 'none';
+    }
     const okSaldo = document.getElementById('okSaldo');
     if(hayAnticipo){
       okSaldo.textContent = `Saldo para el día del evento: ${fmtUsd(m.saldo)}`;
@@ -443,22 +525,22 @@
     mostrarOkGuardado(data);
 
     const m = montosDe(data);
-    const enviado = telWa ? await notificarValentina({
-      formulario: "reserva_experiencia",
-      telefono: telWa,
-      compra_id: data.compra_id,
-      evento_nombre: data.evento_nombre,
-      cantidad: data.cantidad,
-      monto_total: m.total,
-      monto_anticipo: m.anticipo,
-      saldo_dia_evento: m.saldo,
-      moneda: data.moneda,
-      metodo_pago_elegido: data.metodo_pago_elegido,
-      es_codigo_propio: data.es_codigo_propio
-    }) : false;
-
-    if(enviado){
-      document.getElementById('btnWhatsapp').style.display = "none";
+    // Avisamos a Valentina (Make) para que envie los datos de pago por WhatsApp.
+    // El boton "Volver a WhatsApp" se queda siempre visible: es la salida si el mensaje no llega.
+    if(telWa){
+      await notificarValentina({
+        formulario: "reserva_experiencia",
+        telefono: telWa,
+        compra_id: data.compra_id,
+        evento_nombre: data.evento_nombre,
+        cantidad: data.cantidad,
+        monto_total: m.total,
+        monto_anticipo: m.anticipo,
+        saldo_dia_evento: m.saldo,
+        moneda: data.moneda,
+        metodo_pago_elegido: data.metodo_pago_elegido,
+        es_codigo_propio: data.es_codigo_propio
+      });
     }
   });
 
@@ -469,11 +551,16 @@
   }
 
   (async () => {
+    document.querySelectorAll('.minutos-pago').forEach(el => { el.textContent = MINUTOS_PARA_PAGAR; });
+
     if(!ids.length){
       document.getElementById('contenido').classList.add('oculto');
       document.getElementById('sinDatos').classList.add('show');
       return;
     }
+
+    // La tasa se carga antes de mostrar cualquier pantalla (tambien la de "reserva ya hecha").
+    await cargarTasa();
 
     // Si este navegador ya reservó con este mismo link, mostrar el resultado guardado y no pedir nada mas.
     if(revisarEnvioPrevio()) return;
