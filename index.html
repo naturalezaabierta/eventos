@@ -247,7 +247,7 @@
     <p id="okSaldo" style="display:none;"></p>
     <p>Toca el botón para volver a WhatsApp con Valentina; ella te envía los datos de pago.</p>
     <a id="btnWhatsapp" class="btn-confirmar" style="display:inline-block;text-decoration:none;margin-top:14px;" target="_blank" rel="noopener">Volver a WhatsApp ✅</a>
-    <p class="aviso-tiempo centrado">⏱️ Tienes <strong class="minutos-pago">10</strong> minutos para completar el pago. Pasado ese tiempo tu cupo podría liberarse.</p>
+    <p class="aviso-tiempo centrado">⏱️ Tienes <strong class="minutos-pago">10</strong> minutos para completar el pago. Pasado ese tiempo tu cupo se libera automáticamente.</p>
   </div>
 
   <div class="state" id="sinDatos">
@@ -261,9 +261,9 @@
   const SUPABASE_URL = "https://tgvcvnhrwswuxgjbpvwq.supabase.co";
   const SUPABASE_KEY = "sb_publishable_EKV8OM1y96u-DV_kUPGwkg_BZuGdf4D";
 
-  // Minutos que se le muestran a la persona para completar el pago despues de reservar.
-  // IMPORTANTE: debe coincidir con el tiempo real de vencimiento del enlace de pago.
-  const MINUTOS_PARA_PAGAR = 10;
+  // Minutos para pagar despues de reservar. El valor real viene de Supabase (config.minutos_pago_reserva,
+  // via fn_tasa_publica) y es el mismo que usa el cron que libera los cupos. Este 10 es solo respaldo.
+  let minutosPagar = 10;
 
   const sb = {
     rpc: async function(fn, params){
@@ -335,8 +335,8 @@
   let metodoElegido = null;
 
   // Tasa BCV (Bs por 1 unidad de la moneda de la tasa). Viene de la tabla config:
-  //   campo 'tasa_bcv'    -> valor numerico
-  //   campo 'tasa_moneda' -> 'USD' | 'EUR' | 'USDT' (opcional; si no existe se asume 'USD')
+  //   config.tasa_bcv    -> valor numerico
+  //   config.tasa_moneda -> 'USD' | 'EUR' | 'USDT' (opcional; si no existe se asume 'USD')
   let tasaBcv = null;
   let tasaMoneda = 'USD';
 
@@ -352,17 +352,14 @@
   function etiquetaTasa(){ return `tasa BCV ${tasaMoneda}`; }
 
   async function cargarTasa(){
-    const { data, error } = await sb.get('config?campo=in.(tasa_bcv,tasa_moneda)&select=campo,valor');
-    if(error || !Array.isArray(data)) return;
-    data.forEach(r => {
-      if(r.campo === 'tasa_bcv'){
-        const n = parseFloat(String(r.valor).replace(',', '.'));
-        if(n > 0) tasaBcv = n;
-      }
-      if(r.campo === 'tasa_moneda' && r.valor){
-        tasaMoneda = String(r.valor).trim().toUpperCase();
-      }
-    });
+    // fn_tasa_publica devuelve solo { tasa, moneda, minutos_pago } (la tabla config ya no se lee desde aqui).
+    const { data, error } = await sb.rpc('fn_tasa_publica', {});
+    if(error || !data) return;
+    const n = Number(data.tasa);
+    if(n > 0) tasaBcv = n;
+    if(data.moneda) tasaMoneda = String(data.moneda).trim().toUpperCase();
+    const mp = Number(data.minutos_pago);
+    if(mp > 0) minutosPagar = mp;
   }
 
   // La funcion fn_crear_reserva_experiencia devuelve monto_anticipo (lo que se paga ahora),
@@ -551,9 +548,7 @@
   }
 
   (async () => {
-    document.querySelectorAll('.minutos-pago').forEach(el => { el.textContent = MINUTOS_PARA_PAGAR; });
-
-    if(!ids.length){
+        if(!ids.length){
       document.getElementById('contenido').classList.add('oculto');
       document.getElementById('sinDatos').classList.add('show');
       return;
@@ -561,6 +556,7 @@
 
     // La tasa se carga antes de mostrar cualquier pantalla (tambien la de "reserva ya hecha").
     await cargarTasa();
+    document.querySelectorAll('.minutos-pago').forEach(el => { el.textContent = minutosPagar; });
 
     // Si este navegador ya reservó con este mismo link, mostrar el resultado guardado y no pedir nada mas.
     if(revisarEnvioPrevio()) return;
