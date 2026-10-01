@@ -222,6 +222,7 @@
   <div class="state" id="ok">
     <h2>¡Reserva apartada! 🌿</h2>
     <p id="okTotal">Total a pagar: —</p>
+    <p id="okSaldo" style="display:none;"></p>
     <p>Dale al botón para volver a WhatsApp y que Valentina te envíe los datos de pago.</p>
     <a id="btnWhatsapp" class="btn-confirmar" style="display:inline-block;text-decoration:none;margin-top:14px;" target="_blank" rel="noopener">Volver a WhatsApp ✅</a>
   </div>
@@ -297,6 +298,15 @@
 
   function fmtUsd(n){ return '$' + Number(n).toFixed(2); }
 
+  // La funcion fn_crear_reserva_experiencia devuelve monto_anticipo (lo que se paga ahora),
+  // monto_total_evento y saldo_dia_evento. No existe un campo "monto_total".
+  function montosDe(data){
+    const anticipo = Number(data.monto_anticipo ?? data.monto_total ?? 0) || 0;
+    const total = Number(data.monto_total_evento ?? anticipo) || 0;
+    const saldo = Number(data.saldo_dia_evento ?? (total - anticipo)) || 0;
+    return { anticipo, total, saldo };
+  }
+
   function fmtFecha(f, hora){
     if(!f) return 'Fecha por confirmar';
     const d = new Date(f + 'T00:00:00');
@@ -357,8 +367,20 @@
 
   function mostrarOkGuardado(data){
     document.getElementById('contenido').classList.add('oculto');
-    document.getElementById('okTotal').textContent =
-      `Total a pagar: ${fmtUsd(data.monto_total)}${data.es_codigo_propio ? ' (con tu descuento aplicado)' : ''}`;
+    const m = montosDe(data);
+    const hayMonto = m.anticipo > 0 || m.total > 0;
+    const hayAnticipo = m.saldo > 0.009;
+    const etiqueta = hayAnticipo ? 'Anticipo a pagar ahora' : 'Total a pagar';
+    document.getElementById('okTotal').textContent = hayMonto
+      ? `${etiqueta}: ${fmtUsd(m.anticipo)}${data.es_codigo_propio ? ' (con tu descuento aplicado)' : ''}`
+      : 'Tu reserva quedó apartada.';
+    const okSaldo = document.getElementById('okSaldo');
+    if(hayAnticipo){
+      okSaldo.textContent = `Saldo para el día del evento: ${fmtUsd(m.saldo)}`;
+      okSaldo.style.display = 'block';
+    }else{
+      okSaldo.style.display = 'none';
+    }
     const btnWa = document.getElementById('btnWhatsapp');
     const msg = `✅ Confirmo mi reserva *${data.compra_id}* — ${data.evento_nombre}, ${data.cantidad} persona(s), pago por ${data.metodo_pago_elegido}. Quedo pendiente de los datos de pago.`;
     btnWa.href = `https://wa.me/584221482602?text=${encodeURIComponent(msg)}`;
@@ -420,13 +442,16 @@
 
     mostrarOkGuardado(data);
 
+    const m = montosDe(data);
     const enviado = telWa ? await notificarValentina({
       formulario: "reserva_experiencia",
       telefono: telWa,
       compra_id: data.compra_id,
       evento_nombre: data.evento_nombre,
       cantidad: data.cantidad,
-      monto_total: data.monto_total,
+      monto_total: m.total,
+      monto_anticipo: m.anticipo,
+      saldo_dia_evento: m.saldo,
       moneda: data.moneda,
       metodo_pago_elegido: data.metodo_pago_elegido,
       es_codigo_propio: data.es_codigo_propio
