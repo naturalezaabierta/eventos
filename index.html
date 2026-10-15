@@ -119,6 +119,8 @@
     outline:none;
   }
   .campo input:focus{ border-color:var(--ochre); }
+  .nota-acomp{ font-size:13px; line-height:1.45; color:var(--forest-soft); margin:14px 0 12px; }
+  .campo .ayuda{ display:block; font-size:12px; color:var(--forest-soft); margin-top:5px; }
 
   .metodos-pago{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .metodo{
@@ -206,6 +208,7 @@
           <button type="button" id="btnMas">+</button>
         </div>
       </div>
+      <div id="acompBox"></div>
     </div>
 
     <div class="bloque">
@@ -213,6 +216,7 @@
       <div class="campo"><label>Nombre</label><input type="text" id="nombre" required autocomplete="off"></div>
       <div class="campo"><label>Apellido</label><input type="text" id="apellido" required autocomplete="off"></div>
       <div class="campo"><label>Teléfono</label><input type="tel" id="telefono" required placeholder="0412..." autocomplete="off"></div>
+      <div class="campo"><label>Correo electrónico</label><input type="email" id="correo" required placeholder="tucorreo@ejemplo.com" autocomplete="email" inputmode="email"><span class="ayuda">Aquí te enviamos la confirmación y tu entrada con QR.</span></div>
     </div>
 
     <div class="bloque">
@@ -408,11 +412,25 @@
 
   function eventoActual(){ return eventos.find(e => e.id === seleccionado); }
 
+  // Nombres de acompañantes: cada nombre escrito recibe su propia entrada con QR.
+  let nombresAcomp = [];
+  function renderAcompanantes(){
+    const box = document.getElementById('acompBox');
+    const n = Math.max(cantidad - 1, 0);
+    if(n === 0){ nombresAcomp = []; box.innerHTML = ''; return; }
+    if(box.querySelectorAll('input').length === n) return;
+    nombresAcomp.length = n;
+    box.innerHTML = '<p class="nota-acomp">Tu entrada con QR es la de esta reserva. Escribe el nombre de cada acompañante para que <b>cada uno tenga su propia entrada con QR</b>, que tú le puedes reenviar. Si dejas un nombre vacío, ese cupo entra con tu mismo QR.</p>'
+      + Array.from({length:n}, (_, i) => `<div class="campo"><label>Acompañante ${i+1}</label><input type="text" class="inp-acomp" data-i="${i}" maxlength="60" autocomplete="off" placeholder="Nombre y apellido" value="${(nombresAcomp[i]||'').replace(/"/g,'&quot;')}"></div>`).join('');
+    box.querySelectorAll('.inp-acomp').forEach(inp => inp.addEventListener('input', () => { nombresAcomp[Number(inp.dataset.i)] = inp.value; }));
+  }
+
   function actualizarTotal(){
     const ev = eventoActual();
     const total = ev ? ev.precio * cantidad : 0;
     document.getElementById('totalTxt').textContent = fmtUsd(total);
     document.getElementById('cantidadTxt').textContent = cantidad;
+    renderAcompanantes();
     const bsEl = document.getElementById('totalBs');
     if(tasaBcv && ev){
       bsEl.textContent = `≈ ${fmtBs(bsDe(total))} · ${etiquetaTasa()}`;
@@ -488,9 +506,11 @@
     const nombre = document.getElementById('nombre').value.trim();
     const apellido = document.getElementById('apellido').value.trim();
     const telefono = document.getElementById('telefono').value.trim();
+    const correo = document.getElementById('correo').value.trim().toLowerCase();
 
     if(!seleccionado){ mostrarError('Selecciona una fecha.'); return; }
     if(!nombre || !apellido || !telefono){ mostrarError('Completa tus datos.'); return; }
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(correo)){ mostrarError('Escribe un correo válido para enviarte tu entrada.'); return; }
     if(!metodoElegido){ mostrarError('Elige cómo vas a pagar.'); return; }
 
     const btn = document.getElementById('btnConfirmar');
@@ -504,7 +524,9 @@
       p_telefono: telefono,
       p_metodo_pago_elegido: metodoElegido,
       p_codigo_referido_usado: refCode,
-      p_tel_wa: telWa
+      p_tel_wa: telWa,
+      p_correo: correo,
+      p_asistentes: nombresAcomp.map(x => (x || '').trim()).filter(Boolean)
     });
 
     if(error || !data || data.ok === false){
