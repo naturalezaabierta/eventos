@@ -238,6 +238,14 @@
       </span>
     </div>
 
+    <div class="bloque">
+      <div class="bloque-titulo">¿Quieres ganar comisiones?</div>
+      <label style="display:flex;gap:12px;align-items:flex-start;background:var(--cream-card);border:1.5px solid var(--line);border-radius:12px;padding:13px 15px;cursor:pointer;font-size:14px;">
+        <input type="checkbox" id="quiereAfiliarse" style="width:20px;height:20px;padding:0;margin:1px 0 0;flex-shrink:0;">
+        <span>Quiero afiliarme gratis y ganar comisiones recomendando Naturaleza Abierta.</span>
+      </label>
+    </div>
+
     <p class="aviso-tiempo" id="avisoForm">⏱️ Una vez que confirmes, tendrás <strong class="minutos-pago">10</strong> minutos para hacer el pago. Ten tu método de pago listo.</p>
 
     <p class="err" id="err"></p>
@@ -544,6 +552,8 @@
     mostrarOkGuardado(data);
 
     const m = montosDe(data);
+    // Guarda si quiere afiliarse (si falla, no frena la reserva)
+    await sb.rpc('fn_guardar_opt_afiliacion', { p_compra_id: data.compra_id, p_quiere: document.getElementById('quiereAfiliarse').checked });
     // Avisamos a Valentina (Make) para que envie los datos de pago por WhatsApp.
     // El boton "Volver a WhatsApp" se queda siempre visible: es la salida si el mensaje no llega.
     if(telWa){
